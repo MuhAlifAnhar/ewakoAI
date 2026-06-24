@@ -83,3 +83,19 @@ Jika Anda memiliki model YOLOv8 khusus yang telah dilatih (misalnya dari Roboflo
 
 ---
 **Selesai!** Buka browser Anda di `http://localhost:3000`, izinkan akses kamera, dan selamat bereksperimen dengan EwakoVision AI!
+
+---
+
+## 🐳 Menjalankan Backend via Docker (Alternatif)
+Jika Anda lebih familiar dengan Docker, backend bisa dijalankan tanpa perlu menginstal Python atau virtual environment:
+
+```bash
+cd backend
+
+# Build Docker image
+docker build -t ewako-backend .
+
+# Jalankan container (ganti YOUR_API_KEY dengan API Key Gemini Anda)
+docker run -p 8000:8000 -e GEMINI_API_KEY=YOUR_API_KEY ewako-backend
+```
+👉 *Backend akan berjalan di `http://localhost:8000`*
