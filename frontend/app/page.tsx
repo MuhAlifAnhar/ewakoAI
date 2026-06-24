@@ -1,7 +1,7 @@
 "use client";
 import React, { useState, useRef } from 'react';
 import Webcam from 'react-webcam';
-import { Camera, Sparkles, AlertCircle, ScanLine, Trash2, Leaf, ShieldCheck, KeyRound } from 'lucide-react';
+import { Camera, Sparkles, AlertCircle, ScanLine, Trash2, Leaf, ShieldCheck, RefreshCcw } from 'lucide-react';
 
 interface AnalysisResult {
   success: boolean;
@@ -25,6 +25,13 @@ export default function EwakoVisionDashboard() {
   const [loading, setLoading] = useState<boolean>(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [capturedImage, setCapturedImage] = useState<string | null>(null);
+
+  const handleReset = () => {
+    setResult(null);
+    setCapturedImage(null);
+    setError(null);
+  };
 
   const base64ToBlob = (base64Data: string) => {
     const byteString = atob(base64Data.split(',')[1]);
@@ -47,6 +54,7 @@ export default function EwakoVisionDashboard() {
 
     setLoading(true);
     setError(null);
+    setCapturedImage(imageSrc); // Mengunci (freeze) frame kamera
 
     try {
       console.log("[EwakoVision] Memulai analisis...");
@@ -55,7 +63,13 @@ export default function EwakoVisionDashboard() {
       formData.append('image', imageBlob, 'webcam_capture.jpg');
 
       console.log("[EwakoVision] Mengirim request POST ke backend...");
-      const response = await fetch('http://localhost:8000/api/analyze', {
+      
+      // Deteksi URL Backend secara dinamis
+      // Di Vercel, Anda cukup mengisi environment variable NEXT_PUBLIC_API_URL dengan URL Hugging Face
+      const isProd = process.env.NODE_ENV === 'production';
+      const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || (isProd ? 'https://muhalifanhar-ewakovision-backend.hf.space' : 'http://localhost:8000');
+      
+      const response = await fetch(`${API_BASE_URL}/api/analyze`, {
         method: 'POST',
         body: formData,
       });
@@ -128,13 +142,22 @@ export default function EwakoVisionDashboard() {
 
             {/* Camera Frame */}
             <div className="relative rounded-2xl overflow-hidden border border-slate-700/50 bg-black aspect-[4/3] shadow-inner flex-shrink-0 group">
-              <Webcam 
-                audio={false} 
-                ref={webcamRef} 
-                screenshotFormat="image/jpeg" 
-                className="w-full h-full object-cover transition-opacity duration-300"
-                style={{ opacity: loading ? 0.5 : 1 }}
-              />
+              {capturedImage ? (
+                <img 
+                  src={capturedImage} 
+                  alt="Tangkapan Kamera" 
+                  className="w-full h-full object-cover transition-opacity duration-300"
+                  style={{ opacity: loading ? 0.5 : 1 }}
+                />
+              ) : (
+                <Webcam 
+                  audio={false} 
+                  ref={webcamRef} 
+                  screenshotFormat="image/jpeg" 
+                  className="w-full h-full object-cover transition-opacity duration-300"
+                  style={{ opacity: loading ? 0.5 : 1 }}
+                />
+              )}
               
               {/* Overlay Bounding Box (YOLOv8) */}
               {result?.data?.bounding_box && !loading && (
@@ -182,9 +205,9 @@ export default function EwakoVisionDashboard() {
             <div className="mt-auto pt-6">
               <button 
                 onClick={handleAnalyze} 
-                disabled={loading}
+                disabled={loading || capturedImage !== null}
                 className={`w-full py-4 rounded-xl font-bold tracking-wide text-sm flex items-center justify-center gap-2 transition-all duration-300 transform ${
-                  loading 
+                  loading || capturedImage !== null
                   ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700' 
                   : 'bg-gradient-to-r from-emerald-500 to-teal-500 text-black shadow-[0_0_20px_rgba(52,211,153,0.3)] hover:shadow-[0_0_30px_rgba(52,211,153,0.5)] hover:-translate-y-0.5 active:translate-y-0'
                 }`}
@@ -288,6 +311,17 @@ export default function EwakoVisionDashboard() {
                       : "Rekomendasi tidak tersedia."
                     }
                   </p>
+                </div>
+
+                {/* Reset Button */}
+                <div className="mt-4 flex justify-end">
+                  <button 
+                    onClick={handleReset}
+                    className="px-6 py-3 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-emerald-500/50 rounded-xl font-bold text-sm text-slate-300 hover:text-emerald-400 transition-all duration-300 flex items-center gap-2 group"
+                  >
+                    <RefreshCcw className="w-4 h-4 group-hover:-rotate-180 transition-transform duration-500" />
+                    Analisis Lagi?
+                  </button>
                 </div>
 
               </div>
