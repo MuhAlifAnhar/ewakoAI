@@ -120,7 +120,7 @@ def predict_object(image_bytes):
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         img_width, img_height = image.size
 
-        results = YOLO_MODEL(image, verbose=False)
+        results = YOLO_MODEL(image, verbose=False, conf=0.5)
         result = results[0]
 
         if len(result.boxes) == 0:

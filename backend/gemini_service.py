@@ -7,7 +7,10 @@ import json
 def dapatkan_rekomendasi_ewako(nama_objek, kategori, akurasi, image_bytes=None, api_key=None):
     # LOGIKA SAKELAR HYBRID
     final_api_key = api_key or os.getenv("GEMINI_API_KEY")
-    perlu_verifikasi_visual = (akurasi < 0.50) and (image_bytes is not None)
+    # Karena YOLOv8 sekarang memotong (filter) akurasi di bawah 50%,
+    # kita naikkan ambang batas keraguan (ambiguity threshold) Gemini menjadi 70%.
+    # Artinya: Jika akurasi YOLO antara 50% hingga 70%, minta Gemini verifikasi ulang.
+    perlu_verifikasi_visual = (akurasi < 0.70) and (image_bytes is not None)
     
     if not final_api_key or final_api_key.strip() == "":
         # MODE OFFLINE/FALLBACK SYSTEM (Tanpa Gemini)

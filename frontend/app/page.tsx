@@ -1,7 +1,8 @@
 "use client";
 import React, { useState, useRef } from 'react';
 import Webcam from 'react-webcam';
-import { Camera, Sparkles, AlertCircle, ScanLine, Trash2, Leaf, ShieldCheck, RefreshCcw, ThumbsUp, ThumbsDown, CheckCircle2 } from 'lucide-react';
+import { Camera, Sparkles, AlertCircle, ScanLine, Trash2, Leaf, ShieldCheck, RefreshCcw, ThumbsUp, ThumbsDown, CheckCircle2, Trophy, Cloud } from 'lucide-react';
+import { supabase } from '../lib/supabaseClient';
 
 interface AnalysisResult {
   success: boolean;
@@ -27,12 +28,71 @@ export default function EwakoVisionDashboard() {
   const [error, setError] = useState<string | null>(null);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<'yes' | 'no' | null>(null);
+  const [totalPoints, setTotalPoints] = useState<number>(0);
+  const [totalCO2, setTotalCO2] = useState<number>(0);
+  const [currentImpact, setCurrentImpact] = useState<{points: number, co2: number} | null>(null);
+
+  const calculateImpact = (category: string, object_detected: string) => {
+    let points = 5;
+    let co2 = 10;
+    const lowerObj = object_detected.toLowerCase();
+    
+    if (lowerObj.includes('plastik') || lowerObj.includes('plastic')) {
+      points = 15; co2 = 50;
+    } else if (lowerObj.includes('kaca') || lowerObj.includes('glass')) {
+      points = 20; co2 = 100;
+    } else if (lowerObj.includes('kertas') || lowerObj.includes('paper') || lowerObj.includes('kardus') || lowerObj.includes('cardboard')) {
+      points = 10; co2 = 20;
+    } else if (lowerObj.includes('metal') || lowerObj.includes('kaleng')) {
+      points = 25; co2 = 80;
+    } else if (category.toLowerCase() === 'organik') {
+      points = 10; co2 = 30; // Kompos
+    }
+    return { points, co2 };
+  };
+
+  const handleFeedback = async (type: 'yes' | 'no') => {
+    setFeedback(type);
+    let earnedPoints = 0;
+    
+    if (type === 'yes' && result) {
+      const impact = calculateImpact(result.data.category, result.data.object_detected);
+      setCurrentImpact(impact);
+      setTotalPoints(prev => prev + impact.points);
+      setTotalCO2(prev => prev + impact.co2);
+      earnedPoints = impact.points;
+    }
+
+    if (result) {
+      // Kirim Data Logging ke Supabase secara asinkron
+      try {
+        const { error } = await supabase
+          .from('log_sampah')
+          .insert([
+            {
+              kategori: result.data.category,
+              poin: earnedPoints,
+              is_akurat: type === 'yes'
+            }
+          ]);
+          
+        if (error) {
+          console.error("[EwakoVision] Gagal menyimpan log ke Supabase:", error.message);
+        } else {
+          console.log("[EwakoVision] ✅ Log aksi iklim berhasil tersimpan ke database Supabase!");
+        }
+      } catch (err) {
+        console.error("[EwakoVision] Error saat memanggil Supabase:", err);
+      }
+    }
+  };
 
   const handleReset = () => {
     setResult(null);
     setCapturedImage(null);
     setError(null);
     setFeedback(null);
+    setCurrentImpact(null);
   };
 
   const base64ToBlob = (base64Data: string) => {
@@ -118,9 +178,19 @@ export default function EwakoVisionDashboard() {
               <p className="text-slate-400 text-xs font-medium tracking-wide uppercase">Deteksi Sampah Hibrida</p>
             </div>
           </div>
-          <div className="hidden sm:flex items-center gap-2 bg-white/5 border border-white/10 px-4 py-1.5 rounded-full">
-            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
-            <span className="text-xs text-slate-300 font-medium tracking-wide">Sistem Aktif</span>
+          <div className="hidden sm:flex items-center gap-4">
+            <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5 rounded-full">
+              <Trophy className="w-3.5 h-3.5 text-yellow-400" />
+              <span className="text-xs text-emerald-400 font-bold tracking-wide">{totalPoints} PTS</span>
+            </div>
+            <div className="flex items-center gap-2 bg-sky-500/10 border border-sky-500/20 px-3 py-1.5 rounded-full">
+              <Cloud className="w-3.5 h-3.5 text-sky-400" />
+              <span className="text-xs text-sky-400 font-bold tracking-wide">{totalCO2}g CO₂</span>
+            </div>
+            <div className="flex items-center gap-2 bg-white/5 border border-white/10 px-4 py-1.5 rounded-full">
+              <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+              <span className="text-xs text-slate-300 font-medium tracking-wide">Sistem Aktif</span>
+            </div>
           </div>
         </div>
       </header>
@@ -316,32 +386,52 @@ export default function EwakoVisionDashboard() {
                   </p>
                 </div>
 
-                {/* Human-in-the-Loop Feedback UI */}
+                {/* Human-in-the-Loop & Gamification Dashboard */}
                 <div className="mt-2 bg-black/40 border border-white/5 p-5 rounded-2xl">
-                  <span className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-3 block">Evaluasi Manusia (Human-in-the-Loop)</span>
-                  
                   {feedback === null ? (
                     <div className="flex flex-col gap-3">
+                      <span className="text-[10px] text-slate-500 uppercase font-bold tracking-widest block">Evaluasi Manusia (Human-in-the-Loop)</span>
                       <p className="text-sm font-medium text-slate-300">Apakah hasil deteksi ini sesuai dengan jenis sampah Anda?</p>
                       <div className="flex flex-wrap items-center gap-2">
                         <button 
-                          onClick={() => setFeedback('yes')}
+                          onClick={() => handleFeedback('yes')}
                           className="px-4 py-2 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 hover:border-emerald-500/50 text-emerald-400 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5"
                         >
                           <ThumbsUp className="w-3.5 h-3.5" /> Ya, Sesuai
                         </button>
                         <button 
-                          onClick={() => setFeedback('no')}
+                          onClick={() => handleFeedback('no')}
                           className="px-4 py-2 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 hover:border-rose-500/50 text-rose-400 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5"
                         >
                           <ThumbsDown className="w-3.5 h-3.5" /> Kurang Tepat
                         </button>
                       </div>
                     </div>
+                  ) : feedback === 'yes' && currentImpact ? (
+                    <div className="flex flex-col gap-3 animate-in fade-in zoom-in duration-300">
+                      <span className="text-[10px] text-emerald-500 uppercase font-bold tracking-widest block">🎉 Aksi Iklim Lokal Berhasil Diukur!</span>
+                      <div className="grid grid-cols-2 gap-3 mt-1">
+                        <div className="bg-emerald-900/40 border border-emerald-500/30 p-4 rounded-xl flex flex-col items-center justify-center text-center shadow-[0_0_15px_rgba(16,185,129,0.15)] relative overflow-hidden group">
+                          <div className="absolute inset-0 bg-gradient-to-tr from-emerald-500/10 to-transparent group-hover:from-emerald-500/20 transition-all"></div>
+                          <Trophy className="w-6 h-6 text-yellow-400 mb-2 relative z-10" />
+                          <span className="text-2xl font-black text-emerald-400 relative z-10">+{currentImpact.points}</span>
+                          <span className="text-[10px] text-emerald-200/70 uppercase font-bold tracking-wider mt-1 relative z-10">Ewako Points</span>
+                        </div>
+                        <div className="bg-sky-900/40 border border-sky-500/30 p-4 rounded-xl flex flex-col items-center justify-center text-center shadow-[0_0_15px_rgba(14,165,233,0.15)] relative overflow-hidden group">
+                          <div className="absolute inset-0 bg-gradient-to-tr from-sky-500/10 to-transparent group-hover:from-sky-500/20 transition-all"></div>
+                          <Cloud className="w-6 h-6 text-sky-400 mb-2 relative z-10" />
+                          <span className="text-2xl font-black text-sky-400 relative z-10">-{currentImpact.co2}g</span>
+                          <span className="text-[10px] text-sky-200/70 uppercase font-bold tracking-wider mt-1 relative z-10">Emisi CO₂ Dicegah</span>
+                        </div>
+                      </div>
+                      <p className="text-xs text-emerald-400/80 font-medium text-center mt-2">
+                        Kamu baru saja memilah material <strong>{result.data.category}</strong>. Poin telah ditambahkan ke papan peringkat kelasmu!
+                      </p>
+                    </div>
                   ) : (
-                    <div className="flex items-center gap-2 text-emerald-400 bg-emerald-500/10 p-3 rounded-xl border border-emerald-500/20 animate-in fade-in zoom-in duration-300">
-                      <CheckCircle2 className="w-5 h-5" />
-                      <p className="text-sm font-medium">Terima kasih! Masukan Anda membantu EwakoVision AI belajar menjadi lebih pintar.</p>
+                    <div className="flex items-center gap-3 text-rose-400 bg-rose-500/10 p-4 rounded-xl border border-rose-500/20 animate-in fade-in zoom-in duration-300">
+                      <AlertCircle className="w-6 h-6 shrink-0" />
+                      <p className="text-sm font-medium">Terima kasih atas koreksinya! Laporan salah deteksi ini telah dikirim ke backend untuk meningkatkan akurasi model AI EwakoVision kami ke depannya.</p>
                     </div>
                   )}
                 </div>
