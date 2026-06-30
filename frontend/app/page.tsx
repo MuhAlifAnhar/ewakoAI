@@ -1,478 +1,195 @@
 "use client";
-import React, { useState, useRef } from 'react';
-import Webcam from 'react-webcam';
-import { Camera, Sparkles, AlertCircle, ScanLine, Trash2, Leaf, ShieldCheck, RefreshCcw, ThumbsUp, ThumbsDown, CheckCircle2, Trophy, Cloud } from 'lucide-react';
-import { supabase } from '../lib/supabaseClient';
 
-interface AnalysisResult {
-  success: boolean;
-  mode: string;
-  data: {
-    object_detected: string;
-    category: string;
-    confidence_score: number;
-    action_recommendation: string;
-    bounding_box?: {
-      x1: number;
-      y1: number;
-      x2: number;
-      y2: number;
-    } | null;
-  };
-}
+import Link from "next/link";
+import {
+  ArrowRight,
+  Gift,
+  LayoutDashboard,
+  Leaf,
+  Map,
+  ScanLine,
+  Sparkles,
+  Trophy,
+  Wallet,
+} from "lucide-react";
 
-export default function EwakoVisionDashboard() {
-  const webcamRef = useRef<Webcam>(null);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [result, setResult] = useState<AnalysisResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [capturedImage, setCapturedImage] = useState<string | null>(null);
-  const [feedback, setFeedback] = useState<'yes' | 'no' | null>(null);
-  const [totalPoints, setTotalPoints] = useState<number>(0);
-  const [totalCO2, setTotalCO2] = useState<number>(0);
-  const [currentImpact, setCurrentImpact] = useState<{points: number, co2: number} | null>(null);
+type FeatureCard = {
+  href: string;
+  title: string;
+  description: string;
+  icon: typeof LayoutDashboard;
+};
 
-  const calculateImpact = (category: string, object_detected: string) => {
-    let points = 5;
-    let co2 = 10;
-    const lowerObj = object_detected.toLowerCase();
-    
-    if (lowerObj.includes('plastik') || lowerObj.includes('plastic')) {
-      points = 15; co2 = 50;
-    } else if (lowerObj.includes('kaca') || lowerObj.includes('glass')) {
-      points = 20; co2 = 100;
-    } else if (lowerObj.includes('kertas') || lowerObj.includes('paper') || lowerObj.includes('kardus') || lowerObj.includes('cardboard')) {
-      points = 10; co2 = 20;
-    } else if (lowerObj.includes('metal') || lowerObj.includes('kaleng')) {
-      points = 25; co2 = 80;
-    } else if (category.toLowerCase() === 'organik') {
-      points = 10; co2 = 30; // Kompos
-    }
-    return { points, co2 };
-  };
+const featureCards: FeatureCard[] = [
+  {
+    href: "/scanner",
+    title: "AI Scanner",
+    description: "Deteksi jenis sampah secara instan lewat kamera.",
+    icon: ScanLine,
+  },
+  {
+    href: "/maps",
+    title: "Peta Fasilitas",
+    description: "Jelajahi lokasi pengelolaan sampah dan rute tercepat.",
+    icon: Map,
+  },
+  {
+    href: "/wallet",
+    title: "Dompet Digital",
+    description: "Pantau saldo poin, donasi, dan riwayat transaksi.",
+    icon: Wallet,
+  },
+  {
+    href: "/rewards",
+    title: "Makassar Creative Hub",
+    description: "Tukarkan hadiah menarik dari pusat kreativitas komunitas.",
+    icon: Gift,
+  },
+];
 
-  const handleFeedback = async (type: 'yes' | 'no') => {
-    setFeedback(type);
-    let earnedPoints = 0;
-    
-    if (type === 'yes' && result) {
-      const impact = calculateImpact(result.data.category, result.data.object_detected);
-      setCurrentImpact(impact);
-      setTotalPoints(prev => prev + impact.points);
-      setTotalCO2(prev => prev + impact.co2);
-      earnedPoints = impact.points;
-    }
-
-    if (result) {
-      // Kirim Data Logging ke Supabase secara asinkron
-      try {
-        const { error } = await supabase
-          .from('log_sampah')
-          .insert([
-            {
-              kategori: result.data.category,
-              poin: earnedPoints,
-              is_akurat: type === 'yes'
-            }
-          ]);
-          
-        if (error) {
-          console.error("[EwakoVision] Gagal menyimpan log ke Supabase:", error.message);
-        } else {
-          console.log("[EwakoVision] ✅ Log aksi iklim berhasil tersimpan ke database Supabase!");
-        }
-      } catch (err) {
-        console.error("[EwakoVision] Error saat memanggil Supabase:", err);
-      }
-    }
-  };
-
-  const handleReset = () => {
-    setResult(null);
-    setCapturedImage(null);
-    setError(null);
-    setFeedback(null);
-    setCurrentImpact(null);
-  };
-
-  const base64ToBlob = (base64Data: string) => {
-    const byteString = atob(base64Data.split(',')[1]);
-    const mimeString = base64Data.split(',')[0].split(':')[1].split(';')[0];
-    const ab = new ArrayBuffer(byteString.length);
-    const ia = new Uint8Array(ab);
-    for (let i = 0; i < byteString.length; i++) {
-      ia[i] = byteString.charCodeAt(i);
-    }
-    return new Blob([ab], { type: mimeString });
-  };
-
-  const handleAnalyze = async () => {
-    if (!webcamRef.current) return;
-    const imageSrc = webcamRef.current.getScreenshot();
-    if (!imageSrc) {
-      setError("Gagal menangkap gambar dari kamera. Pastikan izin kamera aktif.");
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-    setFeedback(null);
-    setCapturedImage(imageSrc); // Mengunci (freeze) frame kamera
-
-    try {
-      console.log("[EwakoVision] Memulai analisis...");
-      const imageBlob = base64ToBlob(imageSrc);
-      const formData = new FormData();
-      formData.append('image', imageBlob, 'webcam_capture.jpg');
-
-      console.log("[EwakoVision] Mengirim request POST ke backend...");
-      
-      // Deteksi URL Backend secara dinamis
-      // Di Vercel, Anda cukup mengisi environment variable NEXT_PUBLIC_API_URL dengan URL Hugging Face
-      const isProd = process.env.NODE_ENV === 'production';
-      const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || (isProd ? 'https://muhalifanhar-ewakovision-backend.hf.space' : 'http://localhost:8000');
-      
-      const response = await fetch(`${API_BASE_URL}/api/analyze`, {
-        method: 'POST',
-        body: formData,
-      });
-
-      console.log("[EwakoVision] Menerima respons HTTP status:", response.status);
-
-      if (!response.ok) {
-        const errText = await response.text();
-        console.error("[EwakoVision] Backend Error Text:", errText);
-        throw new Error(`Gagal terhubung ke Server AI Backend (Status: ${response.status}).`);
-      }
-      
-      const resData: AnalysisResult = await response.json();
-      console.log("[EwakoVision] Data JSON berhasil di-parse:", resData);
-      
-      if (resData && resData.data) {
-        setResult(resData);
-      } else {
-        throw new Error("Format respons tidak valid dari backend.");
-      }
-    } catch (err: any) {
-      console.error("[EwakoVision] Terjadi error di blok catch:", err);
-      setError(err.message || "Terjadi kesalahan sistem.");
-    } finally {
-      console.log("[EwakoVision] Mengeksekusi blok finally, menghentikan loading.");
-      setLoading(false);
-    }
-  };
-
+export default function HomePage() {
   return (
-    <div className="min-h-screen bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-black text-slate-100 font-sans selection:bg-emerald-500/30 overflow-x-hidden pb-12">
-      {/* Premium Header */}
-      <header className="w-full border-b border-white/10 bg-black/20 backdrop-blur-xl sticky top-0 z-50">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+    <div className="space-y-6">
+      <section className="overflow-hidden rounded-[32px] border border-white/10 bg-gradient-to-br from-emerald-500/15 via-slate-900/70 to-teal-500/10 p-6 shadow-[0_20px_80px_rgba(5,150,105,0.2)] backdrop-blur-2xl">
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+          <div className="max-w-2xl">
+            <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3 py-1 text-sm font-medium text-emerald-200">
+              <Sparkles className="h-4 w-4" />
+              Selamat datang di Mangkasara TrashVision AI
+            </div>
+            <h1 className="text-3xl font-semibold tracking-tight text-white sm:text-4xl">
+              Wujudkan Makassar Bebas Sampah 2029.
+            </h1>
+            <p className="mt-3 text-base text-slate-300 sm:text-lg">
+              Pantau dampak lingkungan, kumpulkan poin, dan jadilah bagian dari gerakan pengelolaan sampah yang cerdas di Makassar.
+            </p>
+          </div>
+
+          <div className="rounded-3xl border border-white/10 bg-slate-950/70 p-4 backdrop-blur-xl">
+            <div className="flex items-center gap-3 text-emerald-300">
+              <Leaf className="h-5 w-5" />
+              <span className="text-sm font-semibold">Dampak global aktif</span>
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Total poin</p>
+                <p className="mt-1 text-2xl font-semibold text-white">2.480</p>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Offset karbon</p>
+                <p className="mt-1 text-2xl font-semibold text-white">1.240 kg</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+        <div className="rounded-[28px] border border-white/10 bg-slate-950/70 p-6 backdrop-blur-2xl">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold text-white">Papan peringkat komunitas</p>
+              <p className="text-sm text-slate-400">Kontributor paling aktif minggu ini</p>
+            </div>
+            <div className="rounded-full border border-amber-400/20 bg-amber-500/10 px-3 py-1 text-sm font-semibold text-amber-300">
+              Top 3
+            </div>
+          </div>
+
+          <div className="mt-6 space-y-3">
+            {[
+              { name: "Aqila", points: "1.840 poin", badge: "MVP" },
+              { name: "Raka", points: "1.610 poin", badge: "Cemerlang" },
+              { name: "Nadia", points: "1.430 poin", badge: "Inovatif" },
+            ].map((user) => (
+              <div key={user.name} className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-300">
+                    <Trophy className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <p className="font-semibold text-white">{user.name}</p>
+                    <p className="text-sm text-slate-400">{user.points}</p>
+                  </div>
+                </div>
+                <span className="rounded-full border border-emerald-400/20 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-200">
+                  {user.badge}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-[28px] border border-white/10 bg-gradient-to-br from-emerald-500/15 to-teal-500/10 p-6 backdrop-blur-2xl">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-400 to-teal-600 flex items-center justify-center shadow-[0_0_15px_rgba(52,211,153,0.4)]">
-              <Leaf className="text-black w-6 h-6" />
+            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-300">
+              <LayoutDashboard className="h-5 w-5" />
             </div>
             <div>
-              <h1 className="text-2xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-emerald-400 to-teal-200">
-                EwakoVision AI
-              </h1>
-              <p className="text-slate-400 text-xs font-medium tracking-wide uppercase">Deteksi Sampah Hibrida</p>
+              <p className="text-sm font-semibold text-white">Statistik utama</p>
+              <p className="text-sm text-slate-400">Ringkasan performa ekologi Anda</p>
             </div>
           </div>
-          <div className="hidden sm:flex items-center gap-4">
-            <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5 rounded-full">
-              <Trophy className="w-3.5 h-3.5 text-yellow-400" />
-              <span className="text-xs text-emerald-400 font-bold tracking-wide">{totalPoints} PTS</span>
+
+          <div className="mt-6 grid gap-4 sm:grid-cols-2">
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+              <p className="text-sm text-slate-400">Sampah terdeteksi</p>
+              <p className="mt-2 text-2xl font-semibold text-white">1.284</p>
             </div>
-            <div className="flex items-center gap-2 bg-sky-500/10 border border-sky-500/20 px-3 py-1.5 rounded-full">
-              <Cloud className="w-3.5 h-3.5 text-sky-400" />
-              <span className="text-xs text-sky-400 font-bold tracking-wide">{totalCO2}g CO₂</span>
-            </div>
-            <div className="flex items-center gap-2 bg-white/5 border border-white/10 px-4 py-1.5 rounded-full">
-              <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
-              <span className="text-xs text-slate-300 font-medium tracking-wide">Sistem Aktif</span>
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+              <p className="text-sm text-slate-400">Emisi terkurangi</p>
+              <p className="mt-2 text-2xl font-semibold text-white">8.2 ton</p>
             </div>
           </div>
         </div>
-      </header>
+      </section>
 
-      <main className="max-w-6xl mx-auto px-6 mt-8 grid grid-cols-1 lg:grid-cols-12 gap-8 relative">
-        
-        {/* Glow effect backgrounds */}
-        <div className="absolute top-1/4 left-0 w-72 h-72 bg-emerald-500/10 rounded-full blur-[100px] pointer-events-none -z-10"></div>
-        <div className="absolute bottom-1/4 right-0 w-96 h-96 bg-teal-500/10 rounded-full blur-[120px] pointer-events-none -z-10"></div>
-
-        {/* LEFT COLUMN: CAMERA & CONTROLS */}
-        <div className="lg:col-span-5 space-y-6 flex flex-col">
-          {/* Glass Card for Controls */}
-          <div className="bg-white/5 border border-white/10 backdrop-blur-xl p-6 rounded-3xl shadow-2xl flex-1 flex flex-col relative overflow-hidden">
-            {/* Top accent line */}
-            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-500 to-teal-400"></div>
-
-            <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2 mb-6">
-              <Camera className="w-5 h-5 text-emerald-400" />
-              Pemindai Objek
-            </h2>
-
-            {/* Camera Frame */}
-            <div className="relative rounded-2xl overflow-hidden border border-slate-700/50 bg-black aspect-[4/3] shadow-inner flex-shrink-0 group">
-              {capturedImage ? (
-                <img 
-                  src={capturedImage} 
-                  alt="Tangkapan Kamera" 
-                  className="w-full h-full object-cover transition-opacity duration-300"
-                  style={{ opacity: loading ? 0.5 : 1 }}
-                />
-              ) : (
-                <Webcam 
-                  audio={false} 
-                  ref={webcamRef} 
-                  screenshotFormat="image/jpeg" 
-                  className="w-full h-full object-cover transition-opacity duration-300"
-                  style={{ opacity: loading ? 0.5 : 1 }}
-                />
-              )}
-              
-              {/* Overlay Bounding Box (YOLOv8) */}
-              {result?.data?.bounding_box && !loading && (
-                <div 
-                  className="absolute border-[3px] border-emerald-500 bg-emerald-500/20 z-30 pointer-events-none transition-all duration-300 shadow-[0_0_20px_rgba(52,211,153,0.4)]"
-                  style={{
-                    left: `${result.data.bounding_box.x1 * 100}%`,
-                    top: `${result.data.bounding_box.y1 * 100}%`,
-                    width: `${(result.data.bounding_box.x2 - result.data.bounding_box.x1) * 100}%`,
-                    height: `${(result.data.bounding_box.y2 - result.data.bounding_box.y1) * 100}%`
-                  }}
-                >
-                  {/* Label diposisikan di DALAM kotak agar tidak terpotong (overflow-hidden) */}
-                  <div className="bg-emerald-500 text-black text-[10px] sm:text-xs font-bold px-2 py-1 absolute top-0 left-0 whitespace-nowrap">
-                    {result.data.object_detected} ({result.data.confidence_score}%)
-                  </div>
-                </div>
-              )}
-
-              {/* Scanning Animation */}
-              {loading && (
-                <>
-                  <div className="absolute inset-0 bg-emerald-500/10 z-10"></div>
-                  <div className="absolute top-0 left-0 w-full h-2 bg-emerald-400/80 shadow-[0_0_20px_rgba(52,211,153,1)] z-20 animate-[scan_2s_ease-in-out_infinite]"></div>
-                </>
-              )}
-
-              {/* Viewfinder crosshairs */}
-              <div className="absolute top-4 left-4 w-6 h-6 border-t-2 border-l-2 border-white/30 rounded-tl-lg z-10"></div>
-              <div className="absolute top-4 right-4 w-6 h-6 border-t-2 border-r-2 border-white/30 rounded-tr-lg z-10"></div>
-              <div className="absolute bottom-4 left-4 w-6 h-6 border-b-2 border-l-2 border-white/30 rounded-bl-lg z-10"></div>
-              <div className="absolute bottom-4 right-4 w-6 h-6 border-b-2 border-r-2 border-white/30 rounded-br-lg z-10"></div>
+      <section className="rounded-[28px] border border-emerald-400/20 bg-gradient-to-br from-emerald-500/15 via-slate-950/70 to-slate-900/80 p-6 backdrop-blur-2xl">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-3 py-1 text-sm font-semibold text-emerald-200">
+              <Sparkles className="h-4 w-4" />
+              Integrasi Open API DLH Kota Makassar
             </div>
-
-            {/* Removed API Key Input Field */}
-
-            {/* Error Notification */}
-            {error && (
-              <div className="mt-4 p-3 bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs rounded-xl flex items-start gap-2 animate-in fade-in slide-in-from-top-2">
-                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                <p className="leading-relaxed">{error}</p>
-              </div>
-            )}
-
-            <div className="mt-auto pt-6">
-              <button 
-                onClick={handleAnalyze} 
-                disabled={loading || capturedImage !== null}
-                className={`w-full py-4 rounded-xl font-bold tracking-wide text-sm flex items-center justify-center gap-2 transition-all duration-300 transform ${
-                  loading || capturedImage !== null
-                  ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700' 
-                  : 'bg-gradient-to-r from-emerald-500 to-teal-500 text-black shadow-[0_0_20px_rgba(52,211,153,0.3)] hover:shadow-[0_0_30px_rgba(52,211,153,0.5)] hover:-translate-y-0.5 active:translate-y-0'
-                }`}
-              >
-                {loading ? (
-                  <>
-                    <ScanLine className="w-5 h-5 animate-spin" />
-                    MEMPROSES CITRA...
-                  </>
-                ) : (
-                  <>
-                    <ScanLine className="w-5 h-5" />
-                    ANALISIS SAMPAH
-                  </>
-                )}
-              </button>
+            <h2 className="text-xl font-semibold text-white">Sinkronisasi data pengelolaan sampah secara real-time</h2>
+            <p className="mt-2 text-sm leading-7 text-slate-300">
+              Data operasional dipantau dari unit pengolahan terdekat dan disinkronkan ke dashboard pusat DLH.
+            </p>
+          </div>
+          <div className="rounded-[24px] border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+            <div className="flex items-center gap-2 font-semibold">
+              <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-emerald-400" />
+              Sinkronisasi Aktif (Real-time)
             </div>
+            <p className="mt-2 text-sm text-emerald-200/80">
+              Total Data Terkirim ke DLH: 1,034 Ton/Hari (Kecamatan Rappocini & Wajo)
+            </p>
           </div>
         </div>
+      </section>
 
-        {/* RIGHT COLUMN: AI ANALYSIS RESULTS */}
-        <div className="lg:col-span-7 flex flex-col">
-          <div className="bg-white/5 border border-white/10 backdrop-blur-xl p-6 md:p-8 rounded-3xl shadow-2xl flex-1 flex flex-col relative overflow-hidden">
-            {/* Top accent line */}
-            <div className="absolute top-0 right-0 w-full h-1 bg-gradient-to-l from-sky-500 to-teal-400"></div>
-
-            <div className="flex items-center justify-between mb-8 pb-4 border-b border-white/5">
-              <h2 className="text-xl font-bold text-slate-100 flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-sky-400" />
-                Hasil Kecerdasan Buatan
-              </h2>
-              {result && (
-                <div className={`px-3 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase border flex items-center gap-1.5 ${result.mode.includes('Online') ? 'bg-sky-500/10 text-sky-400 border-sky-500/20' : 'bg-slate-800 text-slate-300 border-slate-700'}`}>
-                  <ShieldCheck className="w-3 h-3" />
-                  {result.mode.includes('Online') ? 'Gemini AI Aktif' : 'Engine Lokal Aktif'}
-                </div>
-              )}
-            </div>
-            
-            {result ? (
-              <div className="space-y-6 flex-1 flex flex-col animate-in fade-in slide-in-from-bottom-4 duration-700">
-                
-                {/* Metrics Grid */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {/* Object Detected */}
-                  <div className="bg-black/40 border border-white/5 p-5 rounded-2xl relative group hover:border-emerald-500/30 transition-colors">
-                    <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500 rounded-l-2xl"></div>
-                    <span className="text-[10px] text-slate-500 block uppercase font-bold tracking-widest mb-1">Identifikasi Material</span>
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full bg-emerald-500/10 flex items-center justify-center shrink-0">
-                        <Trash2 className="w-5 h-5 text-emerald-400" />
-                      </div>
-                      <span className="text-2xl font-black text-white truncate" title={result.data.object_detected}>
-                        {result.data.object_detected}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Category */}
-                  <div className="bg-black/40 border border-white/5 p-5 rounded-2xl relative group hover:border-sky-500/30 transition-colors">
-                    <div className="absolute top-0 left-0 w-1 h-full bg-sky-500 rounded-l-2xl"></div>
-                    <span className="text-[10px] text-slate-500 block uppercase font-bold tracking-widest mb-1">Kategori Sistem</span>
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full bg-sky-500/10 flex items-center justify-center shrink-0">
-                        <Leaf className="w-5 h-5 text-sky-400" />
-                      </div>
-                      <span className="text-xl font-bold text-white leading-tight">
-                        {result.data.category}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Confidence Score */}
-                <div className="bg-black/40 border border-white/5 p-5 rounded-2xl">
-                  <div className="flex justify-between items-end mb-3">
-                    <span className="text-[10px] text-slate-500 uppercase font-bold tracking-widest">Akurasi Visual Model</span>
-                    <span className="text-lg font-black text-emerald-400">{result.data.confidence_score}%</span>
-                  </div>
-                  <div className="w-full bg-slate-900 h-2.5 rounded-full overflow-hidden border border-slate-800">
-                    <div 
-                      className="bg-gradient-to-r from-emerald-600 to-emerald-400 h-full rounded-full transition-all duration-1000 ease-out relative" 
-                      style={{ width: `${result.data.confidence_score}%` }}
-                    >
-                      <div className="absolute top-0 right-0 bottom-0 w-10 bg-gradient-to-l from-white/30 to-transparent blur-sm"></div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Recommendation */}
-                <div className="mt-2 bg-gradient-to-br from-slate-800/50 to-black/50 border border-slate-700/50 p-6 rounded-2xl flex-1 flex flex-col relative">
-                  <div className="absolute -top-3 left-6 px-2 bg-slate-900 text-xs font-bold text-sky-400 tracking-wider uppercase flex items-center gap-1.5 border border-slate-700/50 rounded-lg">
-                    <Sparkles className="w-3 h-3" /> Rekomendasi Eksekusi
-                  </div>
-                  <p className="text-slate-300 leading-relaxed font-medium mt-2 text-sm sm:text-base">
-                    {typeof result.data.action_recommendation === 'string' ? 
-                      result.data.action_recommendation.split(/\[.*?\]/).map((text, i) => {
-                        if (text.trim() === '') return null;
-                        return <span key={i}>{text}</span>;
-                      })
-                      : "Rekomendasi tidak tersedia."
-                    }
-                  </p>
-                </div>
-
-                {/* Human-in-the-Loop & Gamification Dashboard */}
-                <div className="mt-2 bg-black/40 border border-white/5 p-5 rounded-2xl">
-                  {feedback === null ? (
-                    <div className="flex flex-col gap-3">
-                      <span className="text-[10px] text-slate-500 uppercase font-bold tracking-widest block">Evaluasi Manusia (Human-in-the-Loop)</span>
-                      <p className="text-sm font-medium text-slate-300">Apakah hasil deteksi ini sesuai dengan jenis sampah Anda?</p>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <button 
-                          onClick={() => handleFeedback('yes')}
-                          className="px-4 py-2 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 hover:border-emerald-500/50 text-emerald-400 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5"
-                        >
-                          <ThumbsUp className="w-3.5 h-3.5" /> Ya, Sesuai
-                        </button>
-                        <button 
-                          onClick={() => handleFeedback('no')}
-                          className="px-4 py-2 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 hover:border-rose-500/50 text-rose-400 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5"
-                        >
-                          <ThumbsDown className="w-3.5 h-3.5" /> Kurang Tepat
-                        </button>
-                      </div>
-                    </div>
-                  ) : feedback === 'yes' && currentImpact ? (
-                    <div className="flex flex-col gap-3 animate-in fade-in zoom-in duration-300">
-                      <span className="text-[10px] text-emerald-500 uppercase font-bold tracking-widest block">🎉 Aksi Iklim Lokal Berhasil Diukur!</span>
-                      <div className="grid grid-cols-2 gap-3 mt-1">
-                        <div className="bg-emerald-900/40 border border-emerald-500/30 p-4 rounded-xl flex flex-col items-center justify-center text-center shadow-[0_0_15px_rgba(16,185,129,0.15)] relative overflow-hidden group">
-                          <div className="absolute inset-0 bg-gradient-to-tr from-emerald-500/10 to-transparent group-hover:from-emerald-500/20 transition-all"></div>
-                          <Trophy className="w-6 h-6 text-yellow-400 mb-2 relative z-10" />
-                          <span className="text-2xl font-black text-emerald-400 relative z-10">+{currentImpact.points}</span>
-                          <span className="text-[10px] text-emerald-200/70 uppercase font-bold tracking-wider mt-1 relative z-10">Ewako Points</span>
-                        </div>
-                        <div className="bg-sky-900/40 border border-sky-500/30 p-4 rounded-xl flex flex-col items-center justify-center text-center shadow-[0_0_15px_rgba(14,165,233,0.15)] relative overflow-hidden group">
-                          <div className="absolute inset-0 bg-gradient-to-tr from-sky-500/10 to-transparent group-hover:from-sky-500/20 transition-all"></div>
-                          <Cloud className="w-6 h-6 text-sky-400 mb-2 relative z-10" />
-                          <span className="text-2xl font-black text-sky-400 relative z-10">-{currentImpact.co2}g</span>
-                          <span className="text-[10px] text-sky-200/70 uppercase font-bold tracking-wider mt-1 relative z-10">Emisi CO₂ Dicegah</span>
-                        </div>
-                      </div>
-                      <p className="text-xs text-emerald-400/80 font-medium text-center mt-2">
-                        Kamu baru saja memilah material <strong>{result.data.category}</strong>. Poin telah ditambahkan ke papan peringkat kelasmu!
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-3 text-rose-400 bg-rose-500/10 p-4 rounded-xl border border-rose-500/20 animate-in fade-in zoom-in duration-300">
-                      <AlertCircle className="w-6 h-6 shrink-0" />
-                      <p className="text-sm font-medium">Terima kasih atas koreksinya! Laporan salah deteksi ini telah dikirim ke backend untuk meningkatkan akurasi model AI EwakoVision kami ke depannya.</p>
-                    </div>
-                  )}
-                </div>
-
-                {/* Reset Button */}
-                <div className="mt-4 flex justify-end">
-                  <button 
-                    onClick={handleReset}
-                    className="px-6 py-3 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-emerald-500/50 rounded-xl font-bold text-sm text-slate-300 hover:text-emerald-400 transition-all duration-300 flex items-center gap-2 group"
-                  >
-                    <RefreshCcw className="w-4 h-4 group-hover:-rotate-180 transition-transform duration-500" />
-                    Analisis Lagi?
-                  </button>
-                </div>
-
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {featureCards.map((card) => {
+          const Icon = card.icon;
+          return (
+            <Link
+              key={card.href}
+              href={card.href}
+              className="group rounded-[24px] border border-white/10 bg-slate-950/70 p-5 backdrop-blur-xl transition-transform duration-200 hover:-translate-y-1"
+            >
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-300">
+                <Icon className="h-5 w-5" />
               </div>
-            ) : (
-              <div className="flex-1 flex flex-col items-center justify-center text-center p-8 border-2 border-dashed border-slate-700/50 rounded-2xl bg-black/20">
-                <div className="w-20 h-20 bg-slate-800/50 rounded-full flex items-center justify-center mb-6">
-                  <ScanLine className="w-10 h-10 text-slate-600" />
-                </div>
-                <h3 className="text-xl font-bold text-slate-300 mb-2">Menunggu Data Visual</h3>
-                <p className="text-slate-500 text-sm max-w-sm">
-                  Posisikan sampah di depan kamera dan tekan tombol <strong>Analisis Sampah</strong> untuk memulai pemindaian bertenaga AI.
-                </p>
+              <h2 className="mt-4 text-lg font-semibold text-white">{card.title}</h2>
+              <p className="mt-2 text-sm leading-6 text-slate-400">{card.description}</p>
+              <div className="mt-6 flex items-center gap-2 text-sm font-medium text-emerald-300">
+                Buka fitur
+                <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
               </div>
-            )}
-          </div>
-        </div>
-
-      </main>
-
-      {/* Global Animation Styles */}
-      <style dangerouslySetInnerHTML={{__html: `
-        @keyframes scan {
-          0% { transform: translateY(0); opacity: 0; }
-          10% { opacity: 1; }
-          90% { opacity: 1; }
-          100% { transform: translateY(300px); opacity: 0; }
-        }
-      `}} />
+            </Link>
+          );
+        })}
+      </section>
     </div>
   );
 }
