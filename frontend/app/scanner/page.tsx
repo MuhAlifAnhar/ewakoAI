@@ -9,6 +9,7 @@ import {
   Cloud,
   Leaf,
   RefreshCcw,
+  RefreshCw,
   ScanLine,
   ShieldCheck,
   Sparkles,
@@ -35,79 +36,22 @@ interface AnalysisResult {
   };
 }
 
-type ScenarioKey = "standard" | "b3" | "ambiguous" | "food";
+interface BackendPredictionResponse {
+  object_name?: string;
+  category?: string;
+  confidence?: number;
+  action_recommendation?: string;
+  bounding_box?: {
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+  } | null;
+}
 
 type ScanMode = "trash" | "chiganjing";
 
-interface ScenarioOption {
-  value: ScenarioKey;
-  label: string;
-  description: string;
-  mockResult: AnalysisResult;
-}
-
-const scenarioOptions: ScenarioOption[] = [
-  {
-    value: "standard",
-    label: "Scenario A — Normal",
-    description: "Botol Plastik · Anorganik · 92%",
-    mockResult: {
-      success: true,
-      mode: "Mock Preview",
-      data: {
-        object_detected: "Botol Plastik",
-        category: "Anorganik",
-        confidence_score: 92,
-        action_recommendation: "Pisahkan botol plastik dari sampah organik dan serahkan ke bank sampah terdekat.",
-      },
-    },
-  },
-  {
-    value: "b3",
-    label: "Scenario B — Red Alert B3",
-    description: "Baterai Bekas · B3 · 89%",
-    mockResult: {
-      success: true,
-      mode: "Mock Preview",
-      data: {
-        object_detected: "Baterai Bekas",
-        category: "B3",
-        confidence_score: 89,
-        action_recommendation: "Tangani dengan alat pelindung, simpan di wadah tertutup, dan serahkan ke pusat pengelolaan limbah B3.",
-      },
-    },
-  },
-  {
-    value: "ambiguous",
-    label: "Scenario C — Ambigu",
-    description: "Benda Abu-abu · Residu · 74%",
-    mockResult: {
-      success: true,
-      mode: "Mock Preview",
-      data: {
-        object_detected: "Benda Abu-abu",
-        category: "Residu",
-        confidence_score: 74,
-        action_recommendation: "Objek ini memerlukan verifikasi manual lebih lanjut sebelum diproses.",
-      },
-    },
-  },
-  {
-    value: "food",
-    label: "Scenario D — Food Waste",
-    description: "Sisa Makanan · 90%",
-    mockResult: {
-      success: true,
-      mode: "Mock Preview",
-      data: {
-        object_detected: "Sisa Makanan",
-        category: "Sisa Makanan",
-        confidence_score: 90,
-        action_recommendation: "Catat sisa makanan untuk menilai potensi pengurangan limbah di dapur.",
-      },
-    },
-  },
-];
+const API_URL = process.env.NEXT_PUBLIC_AI_API_URL ?? "http://127.0.0.1:8000/api/predict";
 
 export default function ScannerPage() {
   const webcamRef = useRef<Webcam>(null);
@@ -115,11 +59,12 @@ export default function ScannerPage() {
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  const [hasCapturedFrame, setHasCapturedFrame] = useState(false);
+  const [cameraError, setCameraError] = useState(false);
   const [feedback, setFeedback] = useState<"yes" | "no" | null>(null);
   const [totalPoints, setTotalPoints] = useState(0);
   const [totalCO2, setTotalCO2] = useState(0);
   const [currentImpact, setCurrentImpact] = useState<{ points: number; co2: number } | null>(null);
-  const [selectedScenario, setSelectedScenario] = useState<ScenarioKey>("standard");
   const [mode, setMode] = useState<ScanMode>("trash");
   const [offlineMode, setOfflineMode] = useState(false);
   const [ambiguityAnswers, setAmbiguityAnswers] = useState({ wasteType: "", handling: "" });
@@ -127,8 +72,8 @@ export default function ScannerPage() {
   const [foodWasteVerified, setFoodWasteVerified] = useState(false);
   const [foodWasteProgress, setFoodWasteProgress] = useState(0);
 
-  const isB3Alert = result?.data.category === "B3";
-  const isAmbiguousAlert = Boolean(result && result.data.category === "Residu" && result.data.confidence_score < 85);
+  const isB3Alert = result?.data.category?.toLowerCase() === "b3";
+  const isAmbiguousAlert = Boolean(result && result.data.confidence_score < 85);
 
   const calculateImpact = (category: string, object_detected: string) => {
     let points = 5;
@@ -169,34 +114,77 @@ export default function ScannerPage() {
   const handleReset = () => {
     setResult(null);
     setCapturedImage(null);
+    setHasCapturedFrame(false);
     setError(null);
     setFeedback(null);
     setCurrentImpact(null);
     setReportSent(false);
     setFoodWasteVerified(false);
     setFoodWasteProgress(0);
+    setAmbiguityAnswers({ wasteType: "", handling: "" });
   };
 
-  const handleAnalyze = () => {
+  const handleNextScan = () => {
+    setCapturedImage(null);
+    setHasCapturedFrame(false);
+    setResult(null);
+    setError(null);
+    setFeedback(null);
+    setCurrentImpact(null);
+    setReportSent(false);
+    setFoodWasteVerified(false);
+    setFoodWasteProgress(0);
+    setAmbiguityAnswers({ wasteType: "", handling: "" });
+  };
+
+  const handleAnalyze = async () => {
     const imageSrc = webcamRef.current?.getScreenshot() ?? null;
+
+    if (!imageSrc) {
+      setError("Kamera belum siap. Pastikan izin kamera aktif.");
+      return;
+    }
+
     setLoading(true);
     setError(null);
     setFeedback(null);
     setCapturedImage(imageSrc);
+    setHasCapturedFrame(true);
     setResult(null);
     setReportSent(false);
+    setAmbiguityAnswers({ wasteType: "", handling: "" });
 
-    const selected = scenarioOptions.find((item) => item.value === selectedScenario);
-    if (!selected) {
-      setError("Silakan pilih skenario simulasi.");
+    try {
+      const base64Image = imageSrc.replace(/^data:image\/\w+;base64,/, "");
+      const response = await fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: base64Image }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const payload = (await response.json()) as BackendPredictionResponse;
+      const mappedResult: AnalysisResult = {
+        success: true,
+        mode: "Live Prediction",
+        data: {
+          object_detected: payload.object_name?.trim() || "Objek tidak teridentifikasi",
+          category: payload.category?.trim() || "Tidak diketahui",
+          confidence_score: Math.max(0, Math.min(100, Number(payload.confidence ?? 0))),
+          action_recommendation: payload.action_recommendation?.trim() || "Tinjau hasil prediksi secara manual.",
+          bounding_box: payload.bounding_box ?? null,
+        },
+      };
+
+      setResult(mappedResult);
+    } catch {
+      setError("Gagal terhubung ke server AI. Pastikan backend aktif.");
+    } finally {
       setLoading(false);
-      return;
     }
-
-    window.setTimeout(() => {
-      setResult(selected.mockResult);
-      setLoading(false);
-    }, 1400);
   };
 
   const handleFoodWasteVerification = () => {
@@ -296,29 +284,24 @@ export default function ScannerPage() {
             Pemindai objek
           </div>
 
-          <div className="mb-4 grid gap-2 sm:grid-cols-2">
-            {scenarioOptions.map((scenario) => {
-              const disabled = scenario.value === "food" && mode !== "chiganjing";
-              return (
-                <button
-                  key={scenario.value}
-                  type="button"
-                  onClick={() => setSelectedScenario(scenario.value)}
-                  disabled={disabled}
-                  className={`rounded-2xl border px-3 py-2 text-left text-sm transition-all ${selectedScenario === scenario.value ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-100" : "border-white/10 bg-slate-950/70 text-slate-300 hover:border-emerald-400/20"} ${disabled ? "cursor-not-allowed opacity-50" : ""}`}
-                >
-                  <p className="font-semibold">{scenario.label}</p>
-                  <p className="mt-1 text-xs text-slate-400">{scenario.description}</p>
-                </button>
-              );
-            })}
+          <div className="mb-4 rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-3 text-sm text-emerald-100">
+            <p className="font-semibold">Analisis langsung ke backend</p>
+            <p className="mt-1 text-xs text-emerald-200/90">Frame kamera saat ini akan dikirim ke server AI lokal di {API_URL}.</p>
           </div>
 
           <div className={`relative aspect-[4/3] overflow-hidden rounded-[24px] border bg-black shadow-inner ${isB3Alert ? "border-rose-500 animate-pulse shadow-[0_0_25px_rgba(244,63,94,0.5)]" : "border-slate-700/60"}`}>
             {capturedImage ? (
               <img src={capturedImage} alt="Tangkapan kamera" className="h-full w-full object-cover" style={{ opacity: loading ? 0.5 : 1 }} />
             ) : (
-              <Webcam audio={false} ref={webcamRef} screenshotFormat="image/jpeg" className="h-full w-full object-cover" style={{ opacity: loading ? 0.5 : 1 }} />
+              <Webcam
+                audio={false}
+                ref={webcamRef}
+                screenshotFormat="image/jpeg"
+                className="h-full w-full object-cover"
+                style={{ opacity: loading ? 0.5 : 1 }}
+                onUserMediaError={() => setCameraError(true)}
+                onUserMedia={() => setCameraError(false)}
+              />
             )}
 
             {result?.data?.bounding_box && !loading && (
@@ -350,22 +333,34 @@ export default function ScannerPage() {
             <div className="absolute bottom-4 right-4 h-6 w-6 rounded-br-lg border-b-2 border-r-2 border-white/30" />
           </div>
 
-          {error && (
+          {error && !capturedImage && (
             <div className="mt-4 flex items-start gap-2 rounded-2xl border border-rose-500/20 bg-rose-500/10 p-3 text-sm text-rose-400">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <p>{error}</p>
             </div>
           )}
 
+          {cameraError && !capturedImage && (
+            <div className="mt-4 flex items-start gap-2 rounded-2xl border border-rose-500/20 bg-rose-500/10 p-3 text-sm text-rose-400">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <p>Kamera tidak dapat dimuat. Pastikan izin kamera aktif.</p>
+            </div>
+          )}
+
           <button
-            onClick={handleAnalyze}
+            onClick={hasCapturedFrame ? handleNextScan : handleAnalyze}
             disabled={loading}
             className={`mt-5 flex w-full items-center justify-center gap-2 rounded-2xl py-4 text-sm font-bold tracking-wide transition-all ${loading ? "cursor-not-allowed border border-slate-700 bg-slate-800 text-slate-500" : "bg-gradient-to-r from-emerald-500 to-teal-500 text-black shadow-[0_0_20px_rgba(52,211,153,0.3)] hover:-translate-y-0.5 hover:shadow-[0_0_30px_rgba(52,211,153,0.5)]"}`}
           >
             {loading ? (
               <>
                 <ScanLine className="h-5 w-5 animate-spin" />
-                MEMPROSES CITRA...
+                Menganalisis dengan Mangkasara AI...
+              </>
+            ) : hasCapturedFrame ? (
+              <>
+                <RefreshCw className="h-5 w-5" />
+                PINDAI SAMPAH SELANJUTNYA
               </>
             ) : (
               <>
@@ -443,7 +438,7 @@ export default function ScannerPage() {
                 <div className="rounded-[22px] border border-amber-400/30 bg-amber-500/10 p-4">
                   <div className="flex items-center gap-2 text-amber-200">
                     <AlertCircle className="h-4 w-4" />
-                    <p className="text-sm font-semibold">Verifikasi mandiri: Apakah ini benar {result.data.object_detected}?</p>
+                    <p className="text-sm font-semibold">Verifikasi Mandiri: Apakah ini benar {result.data.object_detected}?</p>
                   </div>
                   <div className="mt-3 space-y-3">
                     <label className="block rounded-2xl border border-white/10 bg-slate-950/70 p-3 text-sm text-slate-300">
@@ -533,7 +528,7 @@ export default function ScannerPage() {
               </div>
               <h3 className="mb-3 text-xl font-semibold text-white">Siap memulai deteksi sampah?</h3>
               <p className="max-w-md text-sm leading-7 text-slate-400">
-                Aktifkan kamera Anda, pilih skenario simulasi, lalu jalankan analisis untuk melihat respons preview dalam mode lokal.
+                Aktifkan kamera Anda, lalu jalankan analisis untuk melihat hasil prediksi langsung dari backend AI.
               </p>
             </div>
           )}
